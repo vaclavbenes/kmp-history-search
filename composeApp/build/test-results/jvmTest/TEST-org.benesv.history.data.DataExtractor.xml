@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="org.benesv.history.data.DataExtractor" tests="6" skipped="0" failures="0" errors="0" timestamp="2026-01-22T15:40:20.782Z" hostname="M-P2FCF7H2N7" time="0.554">
+  <properties/>
+  <testcase name="testGetFirstElementFromDatabase[jvm]" classname="org.benesv.history.data.DataExtractor" time="0.541"/>
+  <testcase name="testChromeTimeConversion[jvm]" classname="org.benesv.history.data.DataExtractor" time="0.001"/>
+  <testcase name="testChromeExtractorWithCopiedDatabase[jvm]" classname="org.benesv.history.data.DataExtractor" time="0.008"/>
+  <testcase name="testHistoryItemCreation[jvm]" classname="org.benesv.history.data.DataExtractor" time="0.0"/>
+  <testcase name="testFirefoxTimeConversion[jvm]" classname="org.benesv.history.data.DataExtractor" time="0.0"/>
+  <testcase name="testCreateTempCopyOfDatabase[jvm]" classname="org.benesv.history.data.DataExtractor" time="0.003"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[SLF4J: No SLF4J providers were found.
+SLF4J: Defaulting to no-operation (NOP) logger implementation
+SLF4J: See https://www.slf4j.org/codes.html#noProviders for further details.
+]]></system-err>
+</testsuite>

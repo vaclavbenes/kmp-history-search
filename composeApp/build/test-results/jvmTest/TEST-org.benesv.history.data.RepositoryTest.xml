@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="org.benesv.history.data.RepositoryTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-01-22T15:40:21.338Z" hostname="M-P2FCF7H2N7" time="0.16">
+  <properties/>
+  <testcase name="testWhereClauseFiltersOutData[jvm]" classname="org.benesv.history.data.RepositoryTest" time="0.151"/>
+  <testcase name="testGetDataFromDiskReturnsData[jvm]" classname="org.benesv.history.data.RepositoryTest" time="0.009"/>
+  <system-out><![CDATA[[TEST] Broken query returned 1 items
+[TEST] Correct query returned 2 items
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
