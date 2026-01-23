@@ -1,6 +1,6 @@
 package org.benesv.history
 
-import BrowserHistoryIconPainter
+import org.benesv.history.ui.BrowserHistoryIconPainter
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,7 +39,7 @@ fun main() {
             tooltip = "History Search",
             onAction = { showWindow = true },
             menu = {
-                Item("Toggle Search (Meta+B)", onClick = { showWindow = !showWindow })
+                Item("Toggle", onClick = { showWindow = !showWindow })
                 Separator()
                 Item("Quit", onClick = ::exitApplication)
             }

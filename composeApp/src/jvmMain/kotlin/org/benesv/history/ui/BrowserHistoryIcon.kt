@@ -1,3 +1,5 @@
+package org.benesv.history.ui
+
 import androidx.compose.desktop.ui.tooling.preview.Preview
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -15,7 +17,7 @@ import androidx.compose.ui.graphics.painter.Painter
  * This allows it to be used in Image() or Icon() components.
  */
 class BrowserHistoryIconPainter(
-    private val backgroundColor: Color = Color(0xFF5A6650), // Olive Green
+    private val backgroundColor: Color = Color.Transparent,
     private val iconColor: Color = Color.White
 ) : Painter() {
 
@@ -29,12 +31,14 @@ class BrowserHistoryIconPainter(
         // Scale stroke relative to the size of the container
         val strokeWidth = w * 0.08f
 
-        // 1. Draw Background (Squircle)
-        drawRoundRect(
-            color = backgroundColor,
-            cornerRadius = CornerRadius(w * 0.22f, h * 0.22f),
-            size = size
-        )
+        // 1. Draw Background (Squircle) - only if not transparent
+        if (backgroundColor.alpha != 0f) {
+            drawRoundRect(
+                color = backgroundColor,
+                cornerRadius = CornerRadius(w * 0.22f, h * 0.22f),
+                size = size
+            )
+        }
 
         // 2. Draw the "C" Arc
         val cPadding = w * 0.25f
@@ -51,7 +55,7 @@ class BrowserHistoryIconPainter(
         )
 
         // 3. Draw the Clock Icon (Nested)
-        val clockRadius = w * 0.12f
+        val clockRadius = w * 0.15f
         val clockCenter = Offset(w * 0.72f, h * 0.5f)
 
         // Clock Circle

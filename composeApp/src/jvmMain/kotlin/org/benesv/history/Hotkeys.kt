@@ -5,6 +5,7 @@ import com.github.kwhat.jnativehook.NativeHookException
 import com.github.kwhat.jnativehook.keyboard.NativeKeyEvent
 import com.github.kwhat.jnativehook.keyboard.NativeKeyListener
 import org.benesv.history.core.Log
+import java.awt.EventQueue
 import java.util.logging.Level
 import java.util.logging.Logger
 
@@ -24,17 +25,28 @@ object HotkeysManager {
             logger.useParentHandlers = false
 
             GlobalScreen.registerNativeHook()
+
             val l = object : NativeKeyListener {
                 override fun nativeKeyPressed(e: NativeKeyEvent) {
-                    Log.i("Key pressed: ${e.keyChar}")
+                    // Prefer keyCode/modifiers over keyChar for diagnostics.
+                    Log.i("Key pressed: code=${e.keyCode}, modifiers=${e.modifiers} , rawCode=${e.rawCode}")
+
                     val isB = e.keyCode == NativeKeyEvent.VC_B
+                    val shift = e.modifiers and NativeKeyEvent.SHIFT_MASK != 0
+                    val ctrl = e.modifiers and NativeKeyEvent.CTRL_MASK != 0
+                    val cmd = e.modifiers and NativeKeyEvent.META_MASK != 0 // macOS Command
                     val alt = e.modifiers and NativeKeyEvent.ALT_MASK != 0
-                    val meta = e.modifiers and NativeKeyEvent.META_MASK != 0 // macOS Command
-                    if ((meta || alt) && isB) {
-                        onShow()
+
+                    val matches = isB && cmd
+                    if (matches) {
+                        // JNativeHook callback is not on the Compose/UI thread.
+                        EventQueue.invokeLater {
+                            onShow()
+                        }
                     }
                 }
             }
+
             GlobalScreen.addNativeKeyListener(l)
             listener = l
             registered = true
