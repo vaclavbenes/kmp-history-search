@@ -1,11 +1,13 @@
 import org.gradle.kotlin.dsl.libs
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.compose.desktop.application.tasks.AbstractJPackageTask
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
     alias(libs.plugins.composeHotReload)
+    id("com.github.gmazzo.buildconfig") version "6.0.7"
 }
 
 kotlin {
@@ -36,6 +38,9 @@ kotlin {
             implementation(libs.exposed.jdbc)
             implementation(libs.exposed.core)
             implementation(libs.exposed.dao)
+
+            implementation(libs.kotlin.logging)
+            implementation(libs.slf4j.simple)
         }
     }
 }
@@ -46,7 +51,7 @@ compose.desktop {
         mainClass = "org.benesv.history.MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Deb)
+            targetFormats(TargetFormat.Dmg)
             packageName = "History"
             packageVersion = "1.0.0"
 
@@ -64,4 +69,16 @@ compose.desktop {
             }
         }
     }
+}
+
+buildConfig {
+    packageName("org.benesv.history")
+    className("BuildConfig")
+
+    val developFlag = providers
+        .gradleProperty("develop")
+        .map { it.toBoolean() }
+        .orElse(true)
+
+    buildConfigField("DEVELOP", developFlag.get())
 }

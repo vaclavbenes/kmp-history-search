@@ -1,59 +1,76 @@
 package org.benesv.history.core
 
-import kotlin.apply
-import java.io.File
-import java.util.logging.FileHandler
-import java.util.logging.Level
-import java.util.logging.Logger
-import java.util.logging.SimpleFormatter
+import io.github.oshai.kotlinlogging.KLogger
+import io.github.oshai.kotlinlogging.KotlinLogging
+import java.lang.StackWalker
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.reflect.KClass
 
 object Log {
-    private val logFile = File(System.getProperty("user.home"), "Library/Logs/HistorySearch/app.log")
 
-    private val logger: Logger by lazy {
-        Logger.getLogger("org.benesv.history").apply {
-            level = Level.INFO
-            useParentHandlers = false
+    private val walker: StackWalker =
+        StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE)
 
-            try {
-                logFile.parentFile?.mkdirs()
-                handlers.forEach { removeHandler(it) }
-                addHandler(FileHandler(logFile.absolutePath, true).apply {
-                    level = Level.ALL
-                    formatter = object : SimpleFormatter() {
-                        override fun format(record: java.util.logging.LogRecord): String {
-                            return "[${record.level}] ${record.message}\n"
-                        }
-                    }
-                })
-            } catch (e: Exception) {
-                // Fallback to default handlers if configuration fails
-                System.err.println("Failed to configure logger: ${e.message}")
-            }
+    private val loggerCache = ConcurrentHashMap<String, KLogger>()
+
+    private fun loggerFor(owner: KClass<*>?) =
+        if (owner != null) KotlinLogging.logger(owner.qualifiedName ?: owner.simpleName ?: "Log")
+        else KotlinLogging.logger("Log")
+
+    private fun callerLogger(): KLogger {
+        val callerClass: Class<*> = walker.walk { frames ->
+            frames
+                .map { it.declaringClass }
+                .filter { cls ->
+                    cls != Log::class.java &&
+                        cls.name != "org.benesv.history.core.LogKt" &&
+                        !cls.name.startsWith("java.") &&
+                        !cls.name.startsWith("jdk.") &&
+                        !cls.name.startsWith("sun.") &&
+                        !cls.name.startsWith("kotlin.")
+                }
+                .findFirst()
+                .orElse(Log::class.java)
+        }
+
+        val name = if (callerClass == Log::class.java) "Log" else callerClass.name
+        return loggerCache.getOrPut(name) { KotlinLogging.logger(name) }
+    }
+
+
+    fun d(message: String, owner: KClass<*>? = null) {
+        try {
+            val log = owner?.let { loggerFor(it) } ?: callerLogger()
+            log.debug { message }
+        } catch (e: Exception) {
+            println(message)
         }
     }
 
-    fun i(message: String) {
+    fun i(message: String, owner: KClass<*>? = null) {
         try {
-            logger.info(message)
+            val log = owner?.let { loggerFor(it) } ?: callerLogger()
+            log.info { message }
         } catch (e: Exception) {
-            println("[INFO] $message")
+            println(message)
         }
     }
 
-    fun w(message: String) {
+    fun w(message: String, owner: KClass<*>? = null) {
         try {
-            logger.warning(message)
+            val log = owner?.let { loggerFor(it) } ?: callerLogger()
+            log.warn { message }
         } catch (e: Exception) {
-            System.err.println("[WARNING] $message")
+            System.err.println(message)
         }
     }
 
-    fun e(message: String) {
+    fun e(message: String, owner: KClass<*>? = null) {
         try {
-            logger.severe(message)
+            val log = owner?.let { loggerFor(it) } ?: callerLogger()
+            log.error { message }
         } catch (e: Exception) {
-            System.err.println("[ERROR] $message")
+            System.err.println(message)
         }
     }
 }

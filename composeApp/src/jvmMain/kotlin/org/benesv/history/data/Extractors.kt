@@ -26,7 +26,7 @@ private fun exposedConnectReadOnly(dbFile: File, label: String? = null): Databas
     val lbl = label ?: ""
     val spacer = if (lbl.isNotEmpty()) "" else ""
     // Example: [DB][RO][Chrome:Default] /tmp/chrome_hist_xxx.sqlite
-    Log.i("[DB][RO]${lbl} ${dbFile.absolutePath}")
+    Log.i("${lbl} ${dbFile.absolutePath}", HistoryExtractor::class)
     val url = "jdbc:sqlite:file:${dbFile.absolutePath}?mode=ro"
     return Database.connect(url = url, driver = "org.sqlite.JDBC")
 }

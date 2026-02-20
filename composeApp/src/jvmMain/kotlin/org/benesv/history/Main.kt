@@ -1,6 +1,5 @@
 package org.benesv.history
 
-import org.benesv.history.ui.BrowserHistoryIconPainter
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -13,14 +12,14 @@ import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberTrayState
-import kotlinx.coroutines.delay
-import org.benesv.history.core.Log
-import java.awt.Desktop
+import org.benesv.history.BuildConfig.DEVELOP
+import org.benesv.history.ui.BrowserHistoryIconPainter
 
 
 fun main() {
+
     application {
-        var showWindow by remember { mutableStateOf(false) }
+        var showWindow by remember { mutableStateOf(DEVELOP) }
 
         val trayIconPainter = remember(showWindow) {
             BrowserHistoryIconPainter(
@@ -55,9 +54,7 @@ fun main() {
                 App()
                 LaunchedEffect(showWindow) {
                     if (showWindow) {
-                        delay(50) // wait for a window to be visible, maybe compose bug
-                        Log.i("Desktop requestForeground")
-                        Desktop.getDesktop().requestForeground(true)
+                        Desktop.requestForeground()
                     }
                 }
             }

@@ -20,16 +20,13 @@ object HotkeysManager {
     fun start(onShow: () -> Unit) {
         if (registered) return
         try {
-            val logger = Logger.getLogger("com.github.kwhat.jnativehook")
-            logger.level = Level.WARNING
-            logger.useParentHandlers = false
-
+            Log.i("Starting HotKeysManager")
             GlobalScreen.registerNativeHook()
 
             val l = object : NativeKeyListener {
                 override fun nativeKeyPressed(e: NativeKeyEvent) {
                     // Prefer keyCode/modifiers over keyChar for diagnostics.
-                    Log.i("Key pressed: code=${e.keyCode}, modifiers=${e.modifiers} , rawCode=${e.rawCode}")
+                    Log.d("Key pressed: code=${e.keyCode}, modifiers=${e.modifiers} , rawCode=${e.rawCode}", HotkeysManager::class)
 
                     val isB = e.keyCode == NativeKeyEvent.VC_B
                     val shift = e.modifiers and NativeKeyEvent.SHIFT_MASK != 0
@@ -66,6 +63,7 @@ object HotkeysManager {
         } catch (_: Exception) {
             // ignore
         } finally {
+            Log.i("Stopping HotKeysManger")
             registered = false
         }
     }

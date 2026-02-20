@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -61,8 +62,15 @@ import kmp_history_search.composeapp.generated.resources.chrome
 import kmp_history_search.composeapp.generated.resources.chromium
 import kmp_history_search.composeapp.generated.resources.zen
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import org.benesv.history.core.Log
 import org.benesv.history.core.TimeUtil
 import org.benesv.history.data.HistoryRepository
 import org.benesv.history.data.fuzzyFilter
@@ -77,65 +85,61 @@ import java.io.ByteArrayInputStream
 import java.net.URI
 import javax.imageio.ImageIO
 
-@OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class, ExperimentalCoroutinesApi::class)
 @Composable
 fun App() {
     MaterialTheme {
         val scope = rememberCoroutineScope()
 
-        val repo = rememberSaveable { HistoryRepository() }
-        var selection by remember { mutableStateOf<BrowserSelection>(BrowserSelection.All) }
-        var query by remember { mutableStateOf(TextFieldValue("")) }
-        val allItems by repo.historyFlow.collectAsState()
-        var view by remember { mutableStateOf(listOf<HistoryItem>()) }
         var loading by remember { mutableStateOf(false) }
+
+        var selection by remember { mutableStateOf<BrowserSelection>(BrowserSelection.All) }
+        val repo = rememberSaveable { HistoryRepository() }
+        var query by remember { mutableStateOf(TextFieldValue("")) }
+
+        val history by repo.historyFlow.collectAsState()
+
         var dbCounts by remember { mutableStateOf<Pair<Int, Int>?>(null) }
         var selectedIndex by remember { mutableStateOf(-1) }
-        var deleteFavicons by remember { mutableStateOf(false) }
-        val listState = rememberLazyListState()
 
+        val listState = rememberLazyListState()
         val focus = remember { FocusRequester() }
+
         var inputFocused by remember { mutableStateOf(true) }
 
-        var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
         var suggestionIndex by remember { mutableStateOf(0) }
 
-        fun currentPrefix(): String {
-            val parts = query.text.trimEnd().split(Regex("\\s+"))
+        fun currentPrefix(text: String): String {
+            val parts = text.trimEnd().split(Regex("\\s+"))
             return if (parts.isNotEmpty()) parts.last() else ""
         }
 
-        LaunchedEffect(allItems, selection, query.text) {
-            Log.i("Recomputing view with query: ${query.text} and all items: ${allItems.size}")
-            view = fuzzyFilter(filterBySelection(allItems, selection), query.text)
-            selectedIndex = -1
-        }
-
-        LaunchedEffect(allItems) {
-            if (allItems.isNotEmpty()) loading = false
-        }
-
-        LaunchedEffect(selectedIndex) {
-            if (selectedIndex >= 0 && selectedIndex < view.size) {
-                listState.animateScrollToItem(selectedIndex)
+        val view by remember(repo) {
+            combine(
+                repo.historyFlow,
+                snapshotFlow { selection }.distinctUntilChanged(),
+                snapshotFlow { query.text }.distinctUntilChanged(),
+            ) { items, sel, q ->
+                fuzzyFilter(filterBySelection(items, sel), q)
             }
-        }
+        }.collectAsState(initial = emptyList())
+
+        val suggestions by remember(repo) {
+            snapshotFlow { currentPrefix(query.text) }
+                .map { it.trim().lowercase() }
+                .distinctUntilChanged()
+                .flatMapLatest { prefix ->
+                    if (prefix.isBlank()) {
+                        flowOf(emptyList())
+                    } else {
+                        flow { emit(repo.getSuggestions(prefix, limit = 10)) }
+                            .flowOn(Dispatchers.IO)
+                    }
+                }
+        }.collectAsState(initial = emptyList())
 
         LaunchedEffect(Unit){
             focus.requestFocus()
-        }
-
-        // Recompute suggestions when text changes
-        LaunchedEffect(query.text) {
-            val p = currentPrefix()
-            if (p.isBlank()) {
-                suggestions = emptyList()
-                suggestionIndex = 0
-            } else {
-                val list = repo.getSuggestions(p, limit = 10)
-                suggestions = list
-                suggestionIndex = 0
-            }
         }
 
         Column(
@@ -148,32 +152,32 @@ fun App() {
 
                     // Alt+Up/Down cycles suggestions
                     if (UiHotkeys.isCycleSuggestionDown(event) && suggestions.isNotEmpty()) {
-                        Log.i("Cycling suggestion down, current index: $suggestionIndex")
                         suggestionIndex = (suggestionIndex + 1) % suggestions.size
                         return@onPreviewKeyEvent true
                     }
                     if (UiHotkeys.isCycleSuggestionUp(event) && suggestions.isNotEmpty()) {
-                        Log.i("Cycling suggestion up, current index: $suggestionIndex")
                         suggestionIndex = if (suggestionIndex - 1 < 0) suggestions.lastIndex else suggestionIndex - 1
                         return@onPreviewKeyEvent true
                     }
 
-                    // Plain Up/Down navigates history list
+                    // Plain Up/Down navigates history list (+ scroll immediately)
                     if (UiHotkeys.isListDown(event)) {
                         if (view.isNotEmpty()) {
                             selectedIndex = (selectedIndex + 1).coerceAtMost(view.size - 1)
+                            scope.launch { listState.animateScrollToItem(selectedIndex) }
                         }
                         return@onPreviewKeyEvent true
                     }
                     if (UiHotkeys.isListUp(event)) {
                         if (selectedIndex > 0) {
                             selectedIndex = (selectedIndex - 1).coerceAtLeast(0)
+                            scope.launch { listState.animateScrollToItem(selectedIndex) }
                         }
                         return@onPreviewKeyEvent true
                     }
 
                     if (UiHotkeys.isActivate(event)) {
-                        if (selectedIndex >= 0 && selectedIndex < view.size) {
+                        if (selectedIndex in view.indices) {
                             val url = view[selectedIndex].url
                             scope.launch(Dispatchers.IO) { repo.saveTokensFromQuery(query.text) }
                             Desktop.getDesktop().browse(URI(url))
@@ -185,18 +189,22 @@ fun App() {
                 }
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                val prefix = currentPrefix()
+                val prefix = currentPrefix(query.text)
                 val selectedSuggestion = suggestions.getOrNull(suggestionIndex)?.takeIf { it.startsWith(prefix) }
                 val suffix = selectedSuggestion?.drop(prefix.length).orEmpty()
 
                 Box(Modifier.weight(1f)) {
-                    // Switch to BasicTextField within Material3 DecorationBox for pixel-perfect overlay
                     val textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface)
                     var cursorX by remember { mutableStateOf(0f) }
 
                     BasicTextField(
                         value = query,
-                        onValueChange = { query = it },
+                        onValueChange = {
+                            query = it
+                            // reset selection on query change (previously done in LaunchedEffect)
+                            selectedIndex = -1
+                            suggestionIndex = 0
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .onFocusChanged { inputFocused = it.isFocused }
@@ -204,34 +212,33 @@ fun App() {
                                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
                                 when {
-                                    // Tab: accept keyword suggestion (completes the first word from start-of-line)
                                     UiHotkeys.isAcceptSuggestion(e) -> {
                                         if (suffix.isNotEmpty()) {
                                             val newText = query.text + suffix
                                             query = query.copy(text = newText, selection = TextRange(newText.length))
-                                            suggestions = emptyList()
+                                            suggestionIndex = 0
                                             true
                                         } else false
                                     }
-                                    // Alt + Left: move to previous word start
                                     UiHotkeys.isPrevWord(e) -> {
                                         query = UiHotkeys.movePrevWord(query)
+                                        selectedIndex = -1
                                         true
                                     }
-                                    // Alt + Right: move to next word end
                                     UiHotkeys.isNextWord(e) -> {
                                         query = UiHotkeys.moveNextWord(query)
+                                        selectedIndex = -1
                                         true
                                     }
-                                    // Ctrl + W: delete previous word
                                     UiHotkeys.isDeletePrevWord(e) -> {
                                         query = UiHotkeys.deletePrevWord(query)
+                                        selectedIndex = -1
                                         true
                                     }
-                                    // Shift + Option(Alt) + K: delete line (clear input)
                                     UiHotkeys.isClearLine(e) -> {
                                         query = UiHotkeys.clearLine()
-                                        suggestions = emptyList()
+                                        selectedIndex = -1
+                                        suggestionIndex = 0
                                         true
                                     }
 
@@ -242,7 +249,6 @@ fun App() {
                         textStyle = textStyle,
                         cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
                         onTextLayout = { layout ->
-                            // Cursor X position for the end of text in pixels
                             val caret = query.selection.end.coerceIn(0, query.text.length)
                             cursorX = layout.getCursorRect(caret).left
                         },
@@ -253,7 +259,6 @@ fun App() {
                                     Box(Modifier.fillMaxWidth()) {
                                         innerTextField()
                                         if (suffix.isNotEmpty() && query.text.isNotBlank()) {
-                                            // Render suffix at exact measured x of typed text
                                             Text(
                                                 text = suffix,
                                                 style = textStyle.copy(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)),
@@ -261,7 +266,6 @@ fun App() {
                                                 overflow = TextOverflow.Clip,
                                                 modifier = Modifier
                                                     .align(Alignment.CenterStart)
-                                                    // Pixel-precise positioning without DP rounding via translationX in px
                                                     .graphicsLayer { translationX = cursorX }
                                             )
                                         }
@@ -284,55 +288,74 @@ fun App() {
                         }
                     )
                 }
+
                 Spacer(Modifier.width(8.dp))
-                FilterChip(selected = selection is BrowserSelection.All, onClick = { selection = BrowserSelection.All }, label = { Text("All") })
+
+                FilterChip(
+                    selected = selection is BrowserSelection.All,
+                    onClick = {
+                        selection = BrowserSelection.All
+                        selectedIndex = -1
+                    },
+                    label = { Text("All") }
+                )
                 Spacer(Modifier.width(4.dp))
                 FilterChip(
                     selected = selection is BrowserSelection.Single && (selection as BrowserSelection.Single).browser == BrowserType.Chrome,
-                    onClick = { selection = BrowserSelection.Single(BrowserType.Chrome) },
-                    label = { Text("Chrome") })
+                    onClick = {
+                        selection = BrowserSelection.Single(BrowserType.Chrome)
+                        selectedIndex = -1
+                    },
+                    label = { Text("Chrome") }
+                )
                 Spacer(Modifier.width(4.dp))
                 FilterChip(
                     selected = selection is BrowserSelection.Single && (selection as BrowserSelection.Single).browser == BrowserType.Zen,
-                    onClick = { selection = BrowserSelection.Single(BrowserType.Zen) },
-                    label = { Text("Zen") })
+                    onClick = {
+                        selection = BrowserSelection.Single(BrowserType.Zen)
+                        selectedIndex = -1
+                    },
+                    label = { Text("Zen") }
+                )
                 Spacer(Modifier.width(4.dp))
                 FilterChip(
                     selected = selection is BrowserSelection.Single && (selection as BrowserSelection.Single).browser == BrowserType.Thorium,
-                    onClick = { selection = BrowserSelection.Single(BrowserType.Thorium) },
-                    label = { Text("Thorium") })
-                Spacer(Modifier.width(8.dp))
-                FilterChip(
-                    selected = deleteFavicons,
-                    onClick = { deleteFavicons = !deleteFavicons },
-                    label = { Text(if (deleteFavicons) "Delete Favicons" else "Keep Favicons") }
+                    onClick = {
+                        selection = BrowserSelection.Single(BrowserType.Thorium)
+                        selectedIndex = -1
+                    },
+                    label = { Text("Thorium") }
                 )
+
                 Spacer(Modifier.width(8.dp))
+
                 Button(onClick = {
                     scope.launch(Dispatchers.IO) {
                         loading = true
                         try {
-                            repo.refresh(selection, deleteFavicons)
+                            repo.refresh(selection)
                         } finally {
                             loading = false
                         }
                     }
                 }) { Text("Refresh") }
+
                 Spacer(Modifier.width(8.dp))
+
                 Button(onClick = {
                     scope.launch(Dispatchers.IO) {
                         dbCounts = repo.validateDatabase()
                     }
                 }) { Text("Validate DB") }
             }
+
             Spacer(Modifier.height(8.dp))
 
             val isLoadingMore by repo.isLoadingMore.collectAsState()
-            val isInitialLoading = allItems.isEmpty()
+            val isInitialLoading = history.isEmpty()
 
             if (loading || isInitialLoading) LinearProgressIndicator(Modifier.fillMaxWidth())
 
-            // Simple DB stats so user can verify it's filled correctly
             dbCounts?.let { (h, f) ->
                 Spacer(Modifier.height(6.dp))
                 Text("Database: history=$h, favicons=$f", style = MaterialTheme.typography.bodySmall)
@@ -352,11 +375,9 @@ fun App() {
                     )
                     if (idx < view.lastIndex) HorizontalDivider()
 
-                    // Load more when reaching near the end
+                    // Load more when reaching near the end (no LaunchedEffect; just fire-and-forget)
                     if (idx == view.size - 10 && !isLoadingMore) {
-                        LaunchedEffect(Unit) {
-                            repo.loadMore()
-                        }
+                        repo.loadMore()
                     }
                 }
 

@@ -18,19 +18,19 @@ import org.benesv.history.api.app.FaviconEntity
 import org.benesv.history.api.app.Favicons
 import org.benesv.history.api.app.History
 import org.benesv.history.api.app.HistoryEntity
-import org.benesv.history.api.app.Tokens
 import org.benesv.history.api.app.TokenEntity
+import org.benesv.history.api.app.Tokens
+import org.benesv.history.core.Log
 import org.benesv.history.model.BrowserSelection
 import org.benesv.history.model.BrowserType
 import org.benesv.history.model.Favicon
 import org.benesv.history.model.HistoryItem
 import org.benesv.history.model.matches
-import org.benesv.history.core.Log
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.Transaction
 import org.jetbrains.exposed.v1.core.eq
-import org.jetbrains.exposed.v1.core.like
 import org.jetbrains.exposed.v1.core.greaterEq
+import org.jetbrains.exposed.v1.core.like
 import org.jetbrains.exposed.v1.core.statements.api.ExposedBlob
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.SchemaUtils
@@ -42,7 +42,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.sql.DriverManager
-import java.util.Locale
+import java.util.*
 
 
 class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
@@ -77,7 +77,7 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
         private const val FAVICON_BATCH_SIZE = 5
         private const val FAVICON_DELAY_BETWEEN_REQUESTS_MS = 100L
         private const val FAVICON_RETRY_BASE_DELAY_MS = 500L
-        
+
         private fun defaultCacheDir(): File {
             val osName = System.getProperty("os.name").lowercase()
             val userHome = System.getProperty("user.home")
@@ -87,11 +87,13 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
                     // macOS: ~/Library/Application Support/HistorySearch
                     File(userHome, "Library/Application Support/HistorySearch")
                 }
+
                 osName.contains("win") -> {
                     // Windows: %LOCALAPPDATA%\HistorySearch
                     val localAppData = System.getenv("LOCALAPPDATA") ?: File(userHome, "AppData/Local").absolutePath
                     File(localAppData, "HistorySearch")
                 }
+
                 else -> {
                     // Linux/Unix: ~/.local/share/HistorySearch
                     val xdgDataHome = System.getenv("XDG_DATA_HOME") ?: File(userHome, ".local/share").absolutePath
@@ -114,32 +116,35 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
     init {
         try {
             val dbFile = File(cacheDir, CACHE_DB_FILE)
-            Log.i("[DB] Using database at: ${dbFile.absolutePath}")
 
-            // Ensure parent directory exists
             dbFile.parentFile?.let { parent ->
                 if (!parent.exists()) {
                     parent.mkdirs()
                 }
             }
 
-            // Create file if it doesn't exist
             if (!dbFile.exists()) {
                 dbFile.createNewFile()
-                Log.i("[DB] Created new database file")
+                Log.i("Creating new database file")
             }
 
             val jdbcUrl = "jdbc:sqlite:file:${dbFile.absolutePath}"
-
             configureSqlite(jdbcUrl)
             database = Database.connect(url = jdbcUrl, driver = "org.sqlite.JDBC")
 
             scope.launch(Dispatchers.IO) {
+                Log.i("Connecting to ${dbFile.absolutePath}", HistoryRepository::class)
                 initSchema(dbFile)
-                bootstrapIfEmpty()
+
+                // Load something ASAP if the DB already has records,
+                // while in parallel we refresh the whole history from browsers (to catch new data).
+                bootstrapAndRefreshInParallel()
             }
+
+
+
         } catch (e: Exception) {
-            Log.e("[DB] Failed to initialize database: ${e.message}")
+            Log.e("Failed to initialize database: ${e.message}")
             e.printStackTrace()
             throw e
         }
@@ -154,41 +159,62 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
                     st.execute("PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS};")
                 }
             }
-            Log.i("[DB] SQLite configured successfully")
         }.onFailure { e ->
-            Log.e("[DB] Failed to configure SQLite: ${e::class.qualifiedName}: ${e.message}")
-            Log.e("[DB] Stack trace: ${e.stackTraceToString()}")
+            Log.e("Failed to configure SQLite: ${e::class.qualifiedName}: ${e.message}")
+            Log.e("Stack trace: ${e.stackTraceToString()}")
         }
     }
 
     private suspend fun initSchema(dbFile: File) {
         dbQuery {
+            Log.i("Initializing database schema")
             SchemaUtils.createMissingTablesAndColumns(History, Favicons, Tokens)
-            Log.i("[DB] Initialized database at ${dbFile.absolutePath}")
         }
     }
 
-    private suspend fun bootstrapIfEmpty() {
-        val hasRecords = dbQuery { History.selectAll().limit(1).empty().not() }
-        if (hasRecords) {
-            Log.i("[DB] Database already initialized, skipping bootstrap")
-            loadInitialPage()
-            return
+    private suspend fun bootstrapAndRefreshInParallel() = coroutineScope {
+        val hasRecordsDeferred = async {
+            dbQuery { History.selectAll().limit(1).empty().not() }
         }
 
-        val items = mutableListOf<HistoryItem>()
+        val extractedDeferred = async {
+            extractWholeHistoryFromBrowsers()
+        }
 
-        if (chrome.isInstalled()) items += chrome.extract(this)
-        if (zen.isInstalled()) items += zen.extract(this)
-        if (thorium.isInstalled()) items += thorium.extract(this)
-        val processedItems = items.deduplicateByUrlAndSortByLastVisit()
+        val hasRecords = hasRecordsDeferred.await()
+        if (hasRecords) {
+            // Show cached data immediately
+            loadInitialPage()
+        }
 
-        saveToDisk(processedItems)
+        val extracted = extractedDeferred.await()
+        val processed = extracted.deduplicateByUrlAndSortByLastVisit()
+
+        if (!hasRecords && processed.isEmpty()) {
+            // Nothing in DB and nothing extracted -> keep empty state
+            Log.i("No cached records and no extracted history found")
+            return@coroutineScope
+        }
+
+        if (processed.isNotEmpty()) {
+            saveToDisk(processed)
+        }
+
+        // Reset pagination and re-load the first page to reflect any newly saved data
+        resetLazyLoading()
         loadInitialPage()
 
         scope.launch(Dispatchers.Default) {
-            fetchMissingFaviconsInBackground(processedItems)
+            fetchMissingFaviconsInBackground(processed.ifEmpty { _historyFlow.value })
         }
+    }
+
+    private suspend fun extractWholeHistoryFromBrowsers(): List<HistoryItem> {
+        val items = mutableListOf<HistoryItem>()
+        if (chrome.isInstalled()) items += chrome.extract(this)
+        if (zen.isInstalled()) items += zen.extract(this)
+        if (thorium.isInstalled()) items += thorium.extract(this)
+        return items
     }
 
     private fun List<HistoryItem>.deduplicateByUrlAndSortByLastVisit(): List<HistoryItem> =
@@ -198,6 +224,7 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
 
     private suspend fun loadInitialPage() {
         val data = getDataFromDisk(limit = PAGE_SIZE, offset = 0)
+        Log.i("Loading initial page size: ${data.size}")
         currentOffset = PAGE_SIZE
         _historyFlow.value = data
     }
@@ -207,7 +234,6 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
             transaction(db = database) { block() }
         }
 
-    // --- Token suggestions persistence ---
     suspend fun saveTokensFromQuery(query: String) {
         val words = query
             .trim()
