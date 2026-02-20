@@ -58,6 +58,8 @@ compose.desktop {
             modules("java.sql")
 
             macOS {
+                bundleID = "org.benesv.history"
+
                 infoPlist {
                     extraKeysRawXml = """
                         <key>NSSystemExtensionsWhitelist</key>

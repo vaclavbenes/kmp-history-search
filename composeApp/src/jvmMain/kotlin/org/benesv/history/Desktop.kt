@@ -13,7 +13,7 @@ object Desktop {
     suspend fun requestForeground() {
         delay(DELAY) // wait for a window to be visible, maybe compose/awt bug
         Log.i("Put Application to foreground with ${DELAY}ms delay")
-        desktop.requestForeground(true)
+        desktop.requestForeground(false)
     }
 
     fun getDesktop(url: String){

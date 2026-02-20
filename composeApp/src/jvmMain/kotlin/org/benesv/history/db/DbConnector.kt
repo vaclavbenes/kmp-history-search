@@ -1,8 +1,15 @@
 package org.benesv.history.db
 
+import org.benesv.history.api.app.Favicons
+import org.benesv.history.api.app.History
+import org.benesv.history.api.app.Tokens
 import org.benesv.history.core.Log
+import org.benesv.history.data.RepositoryConfig
+import org.jetbrains.exposed.v1.core.Transaction
 import org.jetbrains.exposed.v1.jdbc.Database
+import org.jetbrains.exposed.v1.jdbc.SchemaUtils
 import java.io.File
+import java.sql.DriverManager
 
 
 /**
@@ -11,11 +18,9 @@ import java.io.File
  * 
  * @param dbFile The SQLite database file to connect to
  * @param label A label identifying the browser/profile for logging purposes
- * @param readOnly If true, opens database in read-only mode; if false, allows read-write operations (default: true)
+ * @param readOnly If true, opens a database in read-only mode; if false, allows read-write operations (default: true)
  */
 class DbConnector(val dbFile: File, val label: String, val readOnly: Boolean = true) {
-
-    lateinit var db: DbExecutor
 
     /** JDBC connection URL for SQLite database access */
     val url = if (readOnly) {
@@ -27,16 +32,37 @@ class DbConnector(val dbFile: File, val label: String, val readOnly: Boolean = t
     /** SQLite JDBC driver class */
     val driver = "org.sqlite.JDBC"
 
-    /**
-     * Establishes a connection to the database.
-     * Logs the connection attempt with database label and path.
-     * 
-     * @return A DbExecutor instance wrapping the connected database
-     */
-    fun connect(): DbExecutor {
+
+    val db: DbExecutor by lazy {
         val mode = if (readOnly) "read-only" else "read-write"
         Log.i("Connecting to database: $label ($mode)  path:${dbFile.absolutePath}")
-        return DbExecutor(Database.connect(url = url, driver = driver))
+        DbExecutor(Database.connect(url = url, driver = driver))
+    }
+
+    suspend fun initSchema() {
+        db.query {
+            Log.i("Initializing database schema")
+            SchemaUtils.createMissingTablesAndColumns(History, Favicons, Tokens)
+        }
+    }
+
+    suspend fun <T>query(block: Transaction.() -> T) {
+        db.query(block)
+    }
+
+    fun prepareDb() {
+        runCatching {
+            DriverManager.getConnection(url).use { conn ->
+                conn.createStatement().use { st ->
+                    st.execute("PRAGMA journal_mode=WAL;")
+                    st.execute("PRAGMA synchronous=NORMAL;")
+                    st.execute("PRAGMA busy_timeout=${RepositoryConfig.Sqlite.BUSY_TIMEOUT_MS};")
+                }
+            }
+        }.onFailure { e ->
+            Log.e("Failed to configure SQLite: ${e::class.qualifiedName}: ${e.message}")
+            Log.e("Stack trace: ${e.stackTraceToString()}")
+        }
     }
 
 }

@@ -238,6 +238,18 @@ fun App() {
                                         selectedIndex = -1
                                         true
                                     }
+                                    UiHotkeys.isDeleteToLineStart(e) -> {
+                                        query = UiHotkeys.deleteToLineStart(query)
+                                        selectedIndex = -1
+                                        suggestionIndex = 0
+                                        true
+                                    }
+                                    UiHotkeys.isDeleteToLineEnd(e) -> {
+                                        query = UiHotkeys.deleteToLineEnd(query)
+                                        selectedIndex = -1
+                                        suggestionIndex = 0
+                                        true
+                                    }
                                     UiHotkeys.isClearLine(e) -> {
                                         query = UiHotkeys.clearLine()
                                         selectedIndex = -1

@@ -35,8 +35,7 @@ class ChromeExtractor : HistoryExtractor {
             val dbCopy = FileUtil.createTempCopy(db, "chrome_hist_")
             try {
 
-                val db = DbConnector(dbCopy, "[Chrome:${p.name}]")
-                    .connect()
+                val db = DbConnector(dbCopy, "[Chrome:${p.name}]").db
 
                 db.query {
                     val results = ChromeUrls

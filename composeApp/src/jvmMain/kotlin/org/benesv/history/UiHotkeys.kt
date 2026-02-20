@@ -25,6 +25,8 @@ object UiHotkeys {
     fun isNextWord(e: KeyEvent): Boolean = isKeyDown(e) && e.isAltPressed && e.key == Key.DirectionRight
     fun isDeletePrevWord(e: KeyEvent): Boolean = isKeyDown(e) && e.isCtrlPressed && e.key == Key.W
     fun isClearLine(e: KeyEvent): Boolean = isKeyDown(e) && e.isShiftPressed && e.isAltPressed && e.key == Key.K
+    fun isDeleteToLineStart(e: KeyEvent): Boolean = isKeyDown(e) && e.isCtrlPressed && e.key == Key.U
+    fun isDeleteToLineEnd(e: KeyEvent): Boolean = isKeyDown(e) && e.isCtrlPressed && e.key == Key.K
 
     // Suggestions cycling with Alt+Up/Down
     fun isCycleSuggestionDown(e: KeyEvent): Boolean = isKeyDown(e) && e.isAltPressed && e.key == Key.DirectionDown
@@ -73,6 +75,18 @@ object UiHotkeys {
             append(value.text.substring(cur))
         }
         return value.copy(text = newText, selection = TextRange(start))
+    }
+
+    fun deleteToLineStart(value: TextFieldValue): TextFieldValue {
+        val cur = value.selection.end
+        val newText = value.text.substring(cur)
+        return value.copy(text = newText, selection = TextRange(0))
+    }
+
+    fun deleteToLineEnd(value: TextFieldValue): TextFieldValue {
+        val cur = value.selection.end
+        val newText = value.text.substring(0, cur)
+        return value.copy(text = newText, selection = TextRange(cur))
     }
 
     fun clearLine(): TextFieldValue = TextFieldValue("")

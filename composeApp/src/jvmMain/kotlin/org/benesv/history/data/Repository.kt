@@ -9,9 +9,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import org.benesv.history.api.app.Favicons
-import org.benesv.history.api.app.History
-import org.benesv.history.api.app.Tokens
 import org.benesv.history.core.Log
 import org.benesv.history.core.Pager
 import org.benesv.history.core.defaultCacheDir
@@ -19,19 +16,16 @@ import org.benesv.history.dao.FaviconDao
 import org.benesv.history.dao.HistoryDao
 import org.benesv.history.dao.TokenDao
 import org.benesv.history.db.DbConnector
-import org.benesv.history.db.DbExecutor
 import org.benesv.history.extractor.ChromeExtractor
 import org.benesv.history.extractor.HistoryExtractor
 import org.benesv.history.extractor.ThoriumExtractor
 import org.benesv.history.extractor.ZenExtractor
 import org.benesv.history.manager.FaviconManager
+import org.benesv.history.manager.FaviconOrchestrator
 import org.benesv.history.model.BrowserSelection
-import org.benesv.history.model.Favicon
 import org.benesv.history.model.HistoryItem
 import org.benesv.history.model.matches
-import org.jetbrains.exposed.v1.jdbc.SchemaUtils
 import java.io.File
-import java.sql.DriverManager
 import java.util.Locale
 
 
@@ -61,11 +55,10 @@ class HistoryRepository(
     }
 
     private val dbConnector by lazy { DbConnector(dbFile, "[History]", readOnly = false) }
-    private val db by lazy { dbConnector.connect() }
 
-    private val historyDao: HistoryDao by lazy { HistoryDao(db) }
-    private val faviconDao: FaviconDao by lazy { FaviconDao(db) }
-    private val tokenDao: TokenDao by lazy { TokenDao(db) }
+    private val historyDao: HistoryDao by lazy { HistoryDao(dbConnector.db) }
+    private val faviconDao: FaviconDao by lazy { FaviconDao(dbConnector.db) }
+    private val tokenDao: TokenDao by lazy { TokenDao(dbConnector.db) }
 
     private val pager: Pager<HistoryItem> by lazy {
         Pager(RepositoryConfig.PAGE_SIZE) { limit, offset ->
@@ -74,7 +67,11 @@ class HistoryRepository(
     }
 
     private val faviconManager: FaviconManager by lazy {
-        FaviconManager(faviconDao, scope)
+        FaviconManager(faviconDao)
+    }
+
+    private val faviconOrchestrator: FaviconOrchestrator by lazy {
+        FaviconOrchestrator(faviconManager, historyDao, faviconDao, dbConnector, scope)
     }
 
     private val _historyFlow = MutableStateFlow<List<HistoryItem>>(emptyList())
@@ -86,10 +83,10 @@ class HistoryRepository(
     init {
         try {
             scope.launch(Dispatchers.IO) {
-                db.initSchema()
-                // Load something ASAP if the DB already has records,
-                // while in parallel we refresh the whole history from browsers (to catch new data).
-                bootstrapAndRefreshInParallel()
+                dbConnector.prepareDb()
+                dbConnector.initSchema()
+
+                initializeHistoryData()
             }
         } catch (e: Exception) {
             Log.e("Failed to initialize database: ${e.message}")
@@ -98,29 +95,7 @@ class HistoryRepository(
         }
     }
 
-    private fun configureSqlite(jdbcUrl: String) {
-        runCatching {
-            DriverManager.getConnection(jdbcUrl).use { conn ->
-                conn.createStatement().use { st ->
-                    st.execute("PRAGMA journal_mode=WAL;")
-                    st.execute("PRAGMA synchronous=NORMAL;")
-                    st.execute("PRAGMA busy_timeout=${RepositoryConfig.Sqlite.BUSY_TIMEOUT_MS};")
-                }
-            }
-        }.onFailure { e ->
-            Log.e("Failed to configure SQLite: ${e::class.qualifiedName}: ${e.message}")
-            Log.e("Stack trace: ${e.stackTraceToString()}")
-        }
-    }
-
-    private suspend fun initSchema(dbFile: File) {
-        db.query {
-            Log.i("Initializing database schema")
-            SchemaUtils.createMissingTablesAndColumns(History, Favicons, Tokens)
-        }
-    }
-
-    private suspend fun bootstrapAndRefreshInParallel() = coroutineScope {
+    private suspend fun initializeHistoryData() =  coroutineScope {
         val hasRecordsDeferred = async {
             historyDao.hasRecords()
         }
@@ -148,13 +123,9 @@ class HistoryRepository(
             saveToDisk(processed)
         }
 
-        // Reset pagination and re-load the first page to reflect any newly saved data
         val freshData = pager.loadFirst()
         _historyFlow.value = freshData
 
-//        scope.launch(Dispatchers.Default) {
-//            fetchMissingFaviconsInBackground(processed.ifEmpty { _historyFlow.value })
-//        }
     }
 
     private suspend fun extractWholeHistoryFromBrowsers(): List<HistoryItem> =
@@ -209,11 +180,8 @@ class HistoryRepository(
         val fromDb = pager.loadFirst()
         _historyFlow.value = fromDb
 
-        scope.launch(Dispatchers.Default) {
-            faviconManager.fetchMissingFaviconsInBackground(processed) {
-                val updatedData = historyDao.all()
-                _historyFlow.value = updatedData
-            }
+        faviconOrchestrator.fetchAndUpdateHistory(processed) { updatedData ->
+            _historyFlow.value = updatedData
         }
 
         return fromDb
@@ -229,11 +197,8 @@ class HistoryRepository(
                 if (newItems.isNotEmpty()) {
                     _historyFlow.value = _historyFlow.value + newItems
 
-                    scope.launch(Dispatchers.Default) {
-                        faviconManager.fetchMissingFaviconsInBackground(newItems) {
-                            val updatedData = historyDao.all()
-                            _historyFlow.value = updatedData
-                        }
+                    faviconOrchestrator.fetchAndUpdateHistory(newItems) { updatedData ->
+                        _historyFlow.value = updatedData
                     }
                 }
             } finally {
@@ -270,9 +235,7 @@ class HistoryRepository(
                 // If no favicon, launch a background job to fetch it
                 if (item.favicon == null) {
                     val historyId = historyEntity.id.value
-                    scope.launch(Dispatchers.Default) {
-                        launchFaviconJob(historyId, item.domain)
-                    }
+                    faviconOrchestrator.launchFaviconJob(historyId, item.domain)
                 }
             }
         }.getOrElse { e ->
@@ -280,25 +243,4 @@ class HistoryRepository(
         }
     }
 
-    private suspend fun launchFaviconJob(historyId: Int, domain: String) {
-        try {
-            val faviconData = faviconManager.getFaviconByDomain(domain)
-            if (faviconData != null) {
-                val history = historyDao.findById(historyId)
-                if (history != null) {
-                    val faviconEntity = faviconDao.findEntityByUrl(domain)
-                    if (faviconEntity != null) {
-                        db.query {
-                            history.favicon = faviconEntity
-                        }
-                    }
-                }
-                // Update flow to reflect the change
-                val updatedData = historyDao.all()
-                _historyFlow.value = updatedData
-            }
-        } catch (e: Exception) {
-            Log.w("[Favicon] Error fetching favicon for $domain: ${e.message}")
-        }
-    }
 }

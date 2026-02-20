@@ -41,8 +41,7 @@ class ZenExtractor : HistoryExtractor {
 
             try {
 
-                val db = DbConnector(dbCopy, "[Zen:${p.name}]")
-                    .connect()
+                val db = DbConnector(dbCopy, "[Zen:${p.name}]").db
 
                 db.query {
                     val results = MozPlaces

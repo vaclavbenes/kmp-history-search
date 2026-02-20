@@ -34,8 +34,7 @@ class ThoriumExtractor : HistoryExtractor {
             if (!db.exists()) continue
             val dbCopy = FileUtil.createTempCopy(db, "thorium_hist_")
             try {
-                val db = DbConnector(dbCopy,  "[Thorium:${p.name}]")
-                    .connect()
+                val db = DbConnector(dbCopy,  "[Thorium:${p.name}]").db
 
                 db.query {
                     val results = ChromeUrls
