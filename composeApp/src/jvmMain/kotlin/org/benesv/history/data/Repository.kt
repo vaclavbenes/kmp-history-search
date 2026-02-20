@@ -14,30 +14,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import org.benesv.history.api.app.FaviconEntity
 import org.benesv.history.api.app.Favicons
 import org.benesv.history.api.app.History
-import org.benesv.history.api.app.HistoryEntity
-import org.benesv.history.api.app.TokenEntity
 import org.benesv.history.api.app.Tokens
 import org.benesv.history.core.Log
+import org.benesv.history.core.Pager
+import org.benesv.history.dao.FaviconDao
+import org.benesv.history.dao.HistoryDao
+import org.benesv.history.dao.TokenDao
+import org.benesv.history.db.DbExecutor
+import org.benesv.history.extractor.ChromeExtractor
+import org.benesv.history.extractor.FaviconExtractor
+import org.benesv.history.extractor.ThoriumExtractor
+import org.benesv.history.extractor.ZenExtractor
 import org.benesv.history.model.BrowserSelection
 import org.benesv.history.model.BrowserType
 import org.benesv.history.model.Favicon
 import org.benesv.history.model.HistoryItem
 import org.benesv.history.model.matches
-import org.jetbrains.exposed.v1.core.SortOrder
-import org.jetbrains.exposed.v1.core.Transaction
-import org.jetbrains.exposed.v1.core.eq
-import org.jetbrains.exposed.v1.core.greaterEq
-import org.jetbrains.exposed.v1.core.like
-import org.jetbrains.exposed.v1.core.statements.api.ExposedBlob
 import org.jetbrains.exposed.v1.jdbc.Database
 import org.jetbrains.exposed.v1.jdbc.SchemaUtils
-import org.jetbrains.exposed.v1.jdbc.deleteAll
-import org.jetbrains.exposed.v1.jdbc.deleteWhere
-import org.jetbrains.exposed.v1.jdbc.selectAll
-import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -46,14 +42,21 @@ import java.util.*
 
 
 class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val chrome = ChromeExtractor()
     private val zen = ZenExtractor()
     private val thorium = ThoriumExtractor()
 
+    private lateinit var db: DbExecutor
     private lateinit var database: Database
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val dbMutex = Mutex()
+    private lateinit var historyDao: HistoryDao
+    private lateinit var faviconDao: FaviconDao
+    private lateinit var tokenDao: TokenDao
+
+    private lateinit var pager: Pager<HistoryItem>
 
     private val faviconsDomainsMutex = Mutex()
     private val faviconsDomains = mutableSetOf<String>()
@@ -63,8 +66,6 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
 
     private val _isLoadingMore = MutableStateFlow(false)
     val isLoadingMore: StateFlow<Boolean> = _isLoadingMore.asStateFlow()
-    private var currentOffset = 0
-    private var hasMoreData = true
 
     companion object {
         private const val CACHE_DB_FILE = "history.sqlite"
@@ -131,6 +132,17 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
             val jdbcUrl = "jdbc:sqlite:file:${dbFile.absolutePath}"
             configureSqlite(jdbcUrl)
             database = Database.connect(url = jdbcUrl, driver = "org.sqlite.JDBC")
+            db = DbExecutor(database)
+            
+            // Initialize DAOs
+            historyDao = HistoryDao(db)
+            faviconDao = FaviconDao(db)
+            tokenDao = TokenDao(db)
+
+            // Initialize pager
+            pager = Pager(PAGE_SIZE) { limit, offset ->
+                historyDao.page(limit, offset)
+            }
 
             scope.launch(Dispatchers.IO) {
                 Log.i("Connecting to ${dbFile.absolutePath}", HistoryRepository::class)
@@ -166,7 +178,7 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
     }
 
     private suspend fun initSchema(dbFile: File) {
-        dbQuery {
+        db.query {
             Log.i("Initializing database schema")
             SchemaUtils.createMissingTablesAndColumns(History, Favicons, Tokens)
         }
@@ -174,7 +186,7 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
 
     private suspend fun bootstrapAndRefreshInParallel() = coroutineScope {
         val hasRecordsDeferred = async {
-            dbQuery { History.selectAll().limit(1).empty().not() }
+            historyDao.hasRecords()
         }
 
         val extractedDeferred = async {
@@ -201,8 +213,8 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
         }
 
         // Reset pagination and re-load the first page to reflect any newly saved data
-        resetLazyLoading()
-        loadInitialPage()
+        val freshData = pager.loadFirst()
+        _historyFlow.value = freshData
 
         scope.launch(Dispatchers.Default) {
             fetchMissingFaviconsInBackground(processed.ifEmpty { _historyFlow.value })
@@ -223,64 +235,29 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
             .sortedByDescending { it.lastVisit }
 
     private suspend fun loadInitialPage() {
-        val data = getDataFromDisk(limit = PAGE_SIZE, offset = 0)
+        val data = pager.loadFirst()
         Log.i("Loading initial page size: ${data.size}")
-        currentOffset = PAGE_SIZE
         _historyFlow.value = data
     }
 
-    private suspend fun <T> dbQuery(block: Transaction.() -> T): T =
-        dbMutex.withLock {
-            transaction(db = database) { block() }
-        }
-
     suspend fun saveTokensFromQuery(query: String) {
-        val words = query
-            .trim()
-            .lowercase(Locale.ROOT)
-            .split(Regex("\\s+"))
-            .filter { it.isNotBlank() && it.length >= 3 }
-            .distinct()
-        if (words.isEmpty()) return
-        val now = System.currentTimeMillis()
-        dbQuery {
-            words.forEach { w ->
-                val existing = TokenEntity.find { Tokens.text eq w }.limit(1).firstOrNull()
-                if (existing != null) {
-                    existing.frequency = existing.frequency + 1
-                    existing.lastUsed = now
-                } else {
-                    TokenEntity.new {
-                        text = w
-                        frequency = 1
-                        lastUsed = now
-                    }
-                }
-            }
-        }
+        tokenDao.saveTokens(query)
     }
 
     suspend fun getSuggestions(prefix: String, limit: Int = 5): List<String> {
         val p = prefix.trim().lowercase(Locale.ROOT)
         if (p.isEmpty()) return emptyList()
-        return dbQuery {
-            TokenEntity.find { Tokens.text like "$p%" }
-                .orderBy(Tokens.frequency to SortOrder.DESC, Tokens.lastUsed to SortOrder.DESC)
-                .limit(limit)
-                .map { it.text }
-        }
+        return tokenDao.suggestions(p, limit)
     }
 
     suspend fun refresh(selection: BrowserSelection, deleteFavicons: Boolean = false): List<HistoryItem> {
         val startOfToday = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli()
 
-        dbQuery {
-            History.deleteWhere { History.lastVisit greaterEq startOfToday }
+        historyDao.deleteSince(startOfToday)
 
-            if (deleteFavicons) {
-                Log.i("[DB] Deleting all favicons from DB")
-                Favicons.deleteAll()
-            }
+        if (deleteFavicons) {
+            Log.i("[DB] Deleting all favicons from DB")
+            faviconDao.deleteAll()
         }
 
         val extracted = buildList {
@@ -298,9 +275,8 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
         saveToDisk(processed)
         resetLazyLoading()
 
-        val fromDb = getDataFromDisk(limit = PAGE_SIZE, offset = 0)
+        val fromDb = pager.loadFirst()
         _historyFlow.value = fromDb
-        currentOffset = PAGE_SIZE
 
         scope.launch(Dispatchers.Default) {
             fetchMissingFaviconsInBackground(processed)
@@ -309,49 +285,14 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
         return fromDb
     }
 
-    private suspend fun getDataFromDisk(limit: Int? = null, offset: Int = 0): List<HistoryItem> {
-        return runCatching {
-            dbQuery {
-                val entities = if (limit != null) {
-                    HistoryEntity.all()
-                        .orderBy(History.lastVisit to SortOrder.DESC)
-                        .limit(limit)
-                        .drop(offset)
-                } else {
-                    HistoryEntity.all()
-                        .orderBy(History.lastVisit to SortOrder.DESC)
-                }
-
-                entities.map { entity ->
-                    HistoryItem(
-                        browser = BrowserType.valueOf(entity.browser),
-                        profile = entity.profile,
-                        url = entity.url,
-                        title = entity.title,
-                        lastVisit = entity.lastVisit,
-                        visitCount = entity.visitCount,
-                        domain = entity.domain,
-                        favicon = entity.favicon?.toModel()
-                    )
-                }
-            }
-        }.getOrElse { e ->
-            e.printStackTrace()
-            emptyList()
-        }
-    }
-
     fun loadMore() {
-        if (_isLoadingMore.value || !hasMoreData) return
+        if (_isLoadingMore.value || !pager.hasMore()) return
 
         _isLoadingMore.value = true
         scope.launch(Dispatchers.IO) {
             try {
-                val newItems = getDataFromDisk(limit = PAGE_SIZE, offset = currentOffset)
-                if (newItems.isEmpty()) {
-                    hasMoreData = false
-                } else {
-                    currentOffset += PAGE_SIZE
+                val newItems = pager.loadNext()
+                if (newItems.isNotEmpty()) {
                     _historyFlow.value = _historyFlow.value + newItems
 
                     scope.launch(Dispatchers.Default) {
@@ -365,8 +306,7 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
     }
 
     fun resetLazyLoading() {
-        currentOffset = 0
-        hasMoreData = true
+        pager.reset()
     }
 
     private suspend fun fetchMissingFaviconsInBackground(items: List<HistoryItem>) {
@@ -398,7 +338,7 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
             }
 
             // Reload data from DB to reflect updated favicons
-            val updatedData = getDataFromDisk(limit = null, offset = 0)
+            val updatedData = historyDao.all()
             _historyFlow.value = updatedData
         }
 
@@ -411,7 +351,7 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
      * and persist to DB, then update history rows and notify observers.
      */
     suspend fun getFaviconByDomain(domain: String, size: Int = 64): Favicon? = withContext(Dispatchers.IO) {
-        getFaviconByUrl(domain)?.let { return@withContext it }
+        faviconDao.findByUrl(domain)?.let { return@withContext it }
 
         val shouldFetch = faviconsDomainsMutex.withLock { faviconsDomains.add(domain) }
         if (!shouldFetch) return@withContext null
@@ -431,7 +371,7 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
         return@withContext try {
             val candidates = FaviconExtractor.getCandidateFaviconUrls(domain, size)
             val bytes: ByteArray = fetchFirstNonEmpty(candidates) ?: return@withContext null
-            dbQuery { saveFavicon(domain, bytes, overwrite = true) }
+            faviconDao.save(domain, bytes, overwrite = true)
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -445,56 +385,27 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
      * Prints simple stats and returns a pair of (historyCount, faviconCount).
      */
     suspend fun validateDatabase(): Pair<Int, Int> {
-        return dbQuery {
-            val historyCount = History.selectAll().count()
-            val faviconCount = Favicons.selectAll().count()
-            Log.i("[DB] history rows=$historyCount, favicons rows=$faviconCount in ${cacheDir.absolutePath}/$CACHE_DB_FILE")
-            historyCount.toInt() to faviconCount.toInt()
-        }
+        val historyCount = historyDao.count().toInt()
+        val faviconCount = faviconDao.count().toInt()
+        Log.i("[DB] history rows=$historyCount, favicons rows=$faviconCount in ${cacheDir.absolutePath}/$CACHE_DB_FILE")
+        return historyCount to faviconCount
     }
 
     private suspend fun saveToDisk(items: List<HistoryItem>) {
         runCatching {
             Log.i("Saving to db: ${database.url}")
-            dbQuery {
-                for (item in items) {
-                    val existingHistory = HistoryEntity.find { History.url eq item.url }.firstOrNull()
+            for (item in items) {
+                val faviconEntity = if (item.favicon != null) {
+                    faviconDao.findEntityByUrl(item.favicon.url)
+                } else null
 
-                    val historyEntity = if (existingHistory != null) {
-                        existingHistory.apply {
-                            browser = item.browser.name
-                            profile = item.profile
-                            title = item.title
-                            lastVisit = item.lastVisit
-                            visitCount = item.visitCount
-                            domain = item.domain
-                        }
-                    } else {
-                        HistoryEntity.new {
-                            browser = item.browser.name
-                            profile = item.profile
-                            url = item.url
-                            title = item.title
-                            lastVisit = item.lastVisit
-                            visitCount = item.visitCount
-                            domain = item.domain
-                        }
-                    }
+                val historyEntity = historyDao.upsert(item, faviconEntity)
 
-                    if (item.favicon != null) {
-                        val faviconEntity = FaviconEntity.find { Favicons.url eq item.favicon.url }.firstOrNull()
-                            ?: FaviconEntity.new {
-                                url = item.favicon.url
-                                imageData = ExposedBlob(item.favicon.imageData ?: ByteArray(0))
-                            }
-                        historyEntity.favicon = faviconEntity
-                    }
-
-                    if (item.favicon == null) {
-                        val historyId = historyEntity.id.value
-                        scope.launch(Dispatchers.Default) {
-                            launchFaviconJob(historyId, item.domain)
-                        }
+                // If no favicon, launch background job to fetch it
+                if (item.favicon == null) {
+                    val historyId = historyEntity.id.value
+                    scope.launch(Dispatchers.Default) {
+                        launchFaviconJob(historyId, item.domain)
                     }
                 }
             }
@@ -507,38 +418,21 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
         try {
             val faviconData = getFaviconByDomain(domain)
             if (faviconData != null) {
-                dbQuery {
-                    val history = HistoryEntity.findById(historyId)
-                    if (history != null) {
-                        val faviconEntity = FaviconEntity.find { Favicons.url eq domain }.firstOrNull()
-                        if (faviconEntity != null) {
+                val history = historyDao.findById(historyId)
+                if (history != null) {
+                    val faviconEntity = faviconDao.findEntityByUrl(domain)
+                    if (faviconEntity != null) {
+                        db.query {
                             history.favicon = faviconEntity
                         }
                     }
                 }
                 // Update flow to reflect the change
-                val updatedData = getDataFromDisk(limit = null, offset = 0)
+                val updatedData = historyDao.all()
                 _historyFlow.value = updatedData
             }
         } catch (e: Exception) {
             Log.w("[Favicon] Error fetching favicon for $domain: ${e.message}")
-        }
-    }
-
-    private fun saveFavicon(url: String, imageData: ByteArray, overwrite: Boolean = false): Favicon? {
-        val existingFavicon = FaviconEntity.find { Favicons.url eq url }.firstOrNull()
-
-        return if (existingFavicon == null) {
-            val newFavicon = FaviconEntity.new {
-                this.url = url
-                this.imageData = ExposedBlob(imageData)
-            }
-            newFavicon.toModel()
-        } else {
-            if (overwrite) {
-                existingFavicon.imageData = ExposedBlob(imageData)
-            }
-            existingFavicon.toModel()
         }
     }
 
@@ -588,16 +482,6 @@ class HistoryRepository(private val cacheDir: File = defaultCacheDir()) {
 
     fun isImageContentType(contentType: String?): Boolean {
         return contentType?.startsWith("image/") == true
-    }
-
-    private suspend fun getFaviconByUrl(domain: String): Favicon? {
-        return runCatching {
-            dbQuery {
-                FaviconEntity.find { Favicons.url eq domain }
-                    .firstOrNull()
-                    ?.toModel()
-            }
-        }.getOrNull()
     }
 }
 

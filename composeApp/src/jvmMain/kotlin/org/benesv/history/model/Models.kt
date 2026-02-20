@@ -28,6 +28,19 @@ data class Favicon(
 )
 
 @Serializable
+data class Bookmark(
+    val id: Int,
+    val browser: BrowserType,
+    val profile: String,
+    val url: String,
+    val title: String,
+    val folder: String? = null,
+    val dateAdded: Long, // epoch millis
+    val domain: String,
+    val favicon: Favicon? = null,
+)
+
+@Serializable
 sealed class BrowserSelection {
     @Serializable
     data object All: BrowserSelection()

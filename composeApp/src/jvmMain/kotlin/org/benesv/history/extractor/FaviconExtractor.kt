@@ -1,4 +1,4 @@
-package org.benesv.history.data
+package org.benesv.history.extractor
 
 import org.benesv.history.core.getProtocol
 

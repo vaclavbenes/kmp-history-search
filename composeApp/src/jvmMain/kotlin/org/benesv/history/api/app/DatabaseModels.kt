@@ -1,5 +1,6 @@
 package org.benesv.history.api.app
 
+import org.benesv.history.model.Bookmark
 import org.benesv.history.model.Favicon
 import org.jetbrains.exposed.v1.core.ReferenceOption
 import org.jetbrains.exposed.v1.core.dao.id.EntityID
@@ -66,4 +67,45 @@ class TokenEntity(id: EntityID<Int>) : IntEntity(id) {
     var text by Tokens.text
     var frequency by Tokens.frequency
     var lastUsed by Tokens.lastUsed
+}
+
+// Browser bookmarks storage
+object Bookmarks : IntIdTable("bookmarks") {
+    val browser = text("browser") // BrowserType as string
+    val profile = text("profile")
+    val url = text("url")
+    val title = text("title")
+    val folder = text("folder").nullable() // Bookmark folder path
+    val dateAdded = long("date_added")
+    val domain = text("domain")
+    val favicon = reference(
+        "favicon",
+        Favicons,
+        onDelete = ReferenceOption.SET_NULL
+    ).nullable()
+}
+
+class BookmarkEntity(id: EntityID<Int>) : IntEntity(id) {
+    companion object : IntEntityClass<BookmarkEntity>(Bookmarks)
+
+    var browser by Bookmarks.browser
+    var profile by Bookmarks.profile
+    var url by Bookmarks.url
+    var title by Bookmarks.title
+    var folder by Bookmarks.folder
+    var dateAdded by Bookmarks.dateAdded
+    var domain by Bookmarks.domain
+    var favicon by FaviconEntity optionalReferencedOn Bookmarks.favicon
+
+    fun toModel(): Bookmark = Bookmark(
+        id = id.value,
+        browser = org.benesv.history.model.BrowserType.valueOf(browser),
+        profile = profile,
+        url = url,
+        title = title,
+        folder = folder,
+        dateAdded = dateAdded,
+        domain = domain,
+        favicon = favicon?.toModel()
+    )
 }
