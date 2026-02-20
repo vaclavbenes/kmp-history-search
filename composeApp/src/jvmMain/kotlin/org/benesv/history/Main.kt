@@ -12,6 +12,7 @@ import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberTrayState
+import kotlinx.coroutines.delay
 import org.benesv.history.BuildConfig.DEVELOP
 import org.benesv.history.ui.BrowserHistoryIconPainter
 
@@ -28,8 +29,18 @@ fun main() {
         }
 
         DisposableEffect(Unit) {
-            HotkeysManager.start { showWindow = !showWindow }
+            HotkeysManager.start {
+                showWindow = !showWindow
+
+            }
             onDispose { HotkeysManager.stop() }
+        }
+
+        // [CMP-4231](https://youtrack.jetbrains.com/issue/CMP-4231)
+        LaunchedEffect(showWindow) {
+            if (showWindow){
+                Desktop.requestForeground()
+            }
         }
 
         Tray(
@@ -51,12 +62,10 @@ fun main() {
                 alwaysOnTop = true,
                 state = androidx.compose.ui.window.rememberWindowState(width = 1200.dp, height = 800.dp),
             ) {
-                App()
-                LaunchedEffect(showWindow) {
-                    if (showWindow) {
-                        Desktop.requestForeground()
-                    }
+                if (showWindow) {
+                    App()
                 }
+
             }
         }
     }

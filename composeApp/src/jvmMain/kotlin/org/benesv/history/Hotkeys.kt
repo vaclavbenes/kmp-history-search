@@ -6,8 +6,6 @@ import com.github.kwhat.jnativehook.keyboard.NativeKeyEvent
 import com.github.kwhat.jnativehook.keyboard.NativeKeyListener
 import org.benesv.history.core.Log
 import java.awt.EventQueue
-import java.util.logging.Level
-import java.util.logging.Logger
 
 /**
  * Minimal global hotkey manager using JNativeHook.

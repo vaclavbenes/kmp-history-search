@@ -7,7 +7,7 @@ import org.benesv.history.core.TimeUtil
 import org.benesv.history.core.domainOf
 import org.benesv.history.core.isInternalUrl
 import org.benesv.history.data.HistoryRepository
-import org.benesv.history.db.BrowserDbExecutor
+import org.benesv.history.db.DbConnector
 import org.benesv.history.model.BrowserType
 import org.benesv.history.model.HistoryItem
 import org.jetbrains.exposed.v1.core.SortOrder
@@ -16,6 +16,7 @@ import org.jetbrains.exposed.v1.jdbc.selectAll
 import java.io.File
 
 class ThoriumExtractor : HistoryExtractor {
+    override val browserType: BrowserType = BrowserType.Thorium
     override fun isInstalled(): Boolean = PathsMac.thoriumRoot.exists()
 
     private fun profiles(): List<File> = PathsMac.thoriumRoot.listFiles { f ->
@@ -33,7 +34,7 @@ class ThoriumExtractor : HistoryExtractor {
             if (!db.exists()) continue
             val dbCopy = FileUtil.createTempCopy(db, "thorium_hist_")
             try {
-                val db = BrowserDbExecutor(dbCopy,  "[Thorium:${p.name}]")
+                val db = DbConnector(dbCopy,  "[Thorium:${p.name}]")
                     .connect()
 
                 db.query {

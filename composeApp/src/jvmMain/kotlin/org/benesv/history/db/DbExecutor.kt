@@ -2,8 +2,13 @@ package org.benesv.history.db
 
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.benesv.history.api.app.Favicons
+import org.benesv.history.api.app.History
+import org.benesv.history.api.app.Tokens
+import org.benesv.history.core.Log
 import org.jetbrains.exposed.v1.core.Transaction
 import org.jetbrains.exposed.v1.jdbc.Database
+import org.jetbrains.exposed.v1.jdbc.SchemaUtils
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 
 /**
@@ -23,4 +28,11 @@ class DbExecutor(
         mutex.withLock {
             transaction(db = database) { block() }
         }
+
+    suspend fun initSchema() {
+        query {
+            Log.i("Initializing database schema")
+            SchemaUtils.createMissingTablesAndColumns(History, Favicons, Tokens)
+        }
+    }
 }

@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,12 +58,16 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kmp_history_search.composeapp.generated.resources.Res
 import kmp_history_search.composeapp.generated.resources.chrome
 import kmp_history_search.composeapp.generated.resources.chromium
 import kmp_history_search.composeapp.generated.resources.zen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
@@ -71,18 +76,17 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import org.benesv.history.core.Log
 import org.benesv.history.core.TimeUtil
 import org.benesv.history.data.HistoryRepository
-import org.benesv.history.data.fuzzyFilter
+import org.benesv.history.service.HistorySearchService
 import org.benesv.history.model.BrowserSelection
 import org.benesv.history.model.BrowserType
 import org.benesv.history.model.HistoryItem
 import org.jetbrains.compose.resources.InternalResourceApi
 import org.jetbrains.compose.resources.painterResource
 import java.awt.Cursor
-import java.awt.Desktop
 import java.io.ByteArrayInputStream
-import java.net.URI
 import javax.imageio.ImageIO
 
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class, ExperimentalCoroutinesApi::class)
@@ -92,35 +96,31 @@ fun App() {
         val scope = rememberCoroutineScope()
 
         var loading by remember { mutableStateOf(false) }
-
         var selection by remember { mutableStateOf<BrowserSelection>(BrowserSelection.All) }
-        val repo = rememberSaveable { HistoryRepository() }
         var query by remember { mutableStateOf(TextFieldValue("")) }
-
-        val history by repo.historyFlow.collectAsState()
-
         var dbCounts by remember { mutableStateOf<Pair<Int, Int>?>(null) }
         var selectedIndex by remember { mutableStateOf(-1) }
-
         val listState = rememberLazyListState()
-        val focus = remember { FocusRequester() }
-
-        var inputFocused by remember { mutableStateOf(true) }
 
         var suggestionIndex by remember { mutableStateOf(0) }
+
+        val searchService = remember { HistorySearchService() }
+
+        val repo = rememberSaveable { HistoryRepository() }
+        val history by repo.historyFlow.collectAsState()
 
         fun currentPrefix(text: String): String {
             val parts = text.trimEnd().split(Regex("\\s+"))
             return if (parts.isNotEmpty()) parts.last() else ""
         }
 
-        val view by remember(repo) {
+        val view by remember(repo, searchService) {
             combine(
                 repo.historyFlow,
                 snapshotFlow { selection }.distinctUntilChanged(),
                 snapshotFlow { query.text }.distinctUntilChanged(),
             ) { items, sel, q ->
-                fuzzyFilter(filterBySelection(items, sel), q)
+                searchService.fuzzyFilter(filterBySelection(items, sel), q)
             }
         }.collectAsState(initial = emptyList())
 
@@ -138,6 +138,9 @@ fun App() {
                 }
         }.collectAsState(initial = emptyList())
 
+        val focus = remember { FocusRequester() }
+
+        // Request cursor focus in BasicTextField
         LaunchedEffect(Unit){
             focus.requestFocus()
         }
@@ -180,7 +183,7 @@ fun App() {
                         if (selectedIndex in view.indices) {
                             val url = view[selectedIndex].url
                             scope.launch(Dispatchers.IO) { repo.saveTokensFromQuery(query.text) }
-                            Desktop.getDesktop().browse(URI(url))
+                            Desktop.getDesktop(url)
                         }
                         return@onPreviewKeyEvent true
                     }
@@ -207,7 +210,7 @@ fun App() {
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .onFocusChanged { inputFocused = it.isFocused }
+                            .focusRequester(focus)
                             .onPreviewKeyEvent { e ->
                                 if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
 
@@ -370,7 +373,7 @@ fun App() {
                         onRowClick = {
                             selectedIndex = idx
                             scope.launch(Dispatchers.IO) { repo.saveTokensFromQuery(query.text) }
-                            Desktop.getDesktop().browse(URI(item.url))
+                            Desktop.getDesktop(item.url)
                         }
                     )
                     if (idx < view.lastIndex) HorizontalDivider()

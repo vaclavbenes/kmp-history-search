@@ -7,7 +7,7 @@ import org.benesv.history.core.TimeUtil
 import org.benesv.history.core.domainOf
 import org.benesv.history.core.isInternalUrl
 import org.benesv.history.data.HistoryRepository
-import org.benesv.history.db.BrowserDbExecutor
+import org.benesv.history.db.DbConnector
 import org.benesv.history.model.BrowserType
 import org.benesv.history.model.HistoryItem
 import org.jetbrains.exposed.v1.core.SortOrder
@@ -16,6 +16,7 @@ import org.jetbrains.exposed.v1.jdbc.selectAll
 import java.io.File
 
 class ChromeExtractor : HistoryExtractor {
+    override val browserType: BrowserType = BrowserType.Chrome
     override fun isInstalled(): Boolean = PathsMac.chromeRoot.exists()
 
     private fun profiles(): List<File> = PathsMac.chromeRoot.listFiles { f ->
@@ -34,7 +35,7 @@ class ChromeExtractor : HistoryExtractor {
             val dbCopy = FileUtil.createTempCopy(db, "chrome_hist_")
             try {
 
-                val db = BrowserDbExecutor(dbCopy, "[Chrome:${p.name}]")
+                val db = DbConnector(dbCopy, "[Chrome:${p.name}]")
                     .connect()
 
                 db.query {

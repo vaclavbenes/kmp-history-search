@@ -7,16 +7,16 @@ import org.benesv.history.core.TimeUtil
 import org.benesv.history.core.domainOf
 import org.benesv.history.core.isInternalUrl
 import org.benesv.history.data.HistoryRepository
-import org.benesv.history.db.BrowserDbExecutor
+import org.benesv.history.db.DbConnector
 import org.benesv.history.model.BrowserType
 import org.benesv.history.model.HistoryItem
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.greaterEq
 import org.jetbrains.exposed.v1.jdbc.selectAll
-import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
 
 class ZenExtractor : HistoryExtractor {
+    override val browserType: BrowserType = BrowserType.Zen
     private fun zenProfilesDir(): File? = PathsMac.zenRootCandidates.firstOrNull { it.exists() }
 
     override fun isInstalled(): Boolean = zenProfilesDir() != null
@@ -41,7 +41,7 @@ class ZenExtractor : HistoryExtractor {
 
             try {
 
-                val db = BrowserDbExecutor(dbCopy, "[Zen:${p.name}]")
+                val db = DbConnector(dbCopy, "[Zen:${p.name}]")
                     .connect()
 
                 db.query {
