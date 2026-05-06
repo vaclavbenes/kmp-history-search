@@ -1,0 +1,16 @@
+--app-image
+"/Users/vaclav.benes/Repos/kotlin-multiplatform/kmp-history-search/composeApp/build/compose/binaries/main/app"
+--resource-dir
+"/Users/vaclav.benes/Repos/kotlin-multiplatform/kmp-history-search/composeApp/build/compose/tmp/resources"
+--type
+"dmg"
+--dest
+"/Users/vaclav.benes/Repos/kotlin-multiplatform/kmp-history-search/composeApp/build/compose/binaries/main/dmg"
+--name
+"History"
+--app-version
+"1.0.1"
+--mac-package-identifier
+"org.benesv.history"
+--mac-entitlements
+"/Users/vaclav.benes/Repos/kotlin-multiplatform/kmp-history-search/composeApp/build/compose/default-resources/1.10.1/default-entitlements.plist"

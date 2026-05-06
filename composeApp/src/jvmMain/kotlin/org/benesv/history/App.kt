@@ -4,6 +4,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -362,6 +363,14 @@ fun App() {
                         dbCounts = repo.validateDatabase()
                     }
                 }) { Text("Validate DB") }
+
+                Spacer(Modifier.width(8.dp))
+
+                Text(
+                    text = "v${BuildConfig.APP_VERSION}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             Spacer(Modifier.height(8.dp))
@@ -377,34 +386,62 @@ fun App() {
                 Spacer(Modifier.height(6.dp))
             }
 
-            LazyColumn(Modifier.fillMaxSize(), state = listState) {
-                itemsIndexed(view) { idx, item ->
-                    HistoryRow(
-                        item = item,
-                        isSelected = idx == selectedIndex,
-                        onRowClick = {
-                            selectedIndex = idx
-                            scope.launch(Dispatchers.IO) { repo.saveTokensFromQuery(query.text) }
-                            Desktop.getDesktop(item.url)
-                        }
-                    )
-                    if (idx < view.lastIndex) HorizontalDivider()
+            Box(Modifier.fillMaxSize()) {
+                LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                    itemsIndexed(view) { idx, item ->
+                        HistoryRow(
+                            item = item,
+                            isSelected = idx == selectedIndex,
+                            onRowClick = {
+                                selectedIndex = idx
+                                scope.launch(Dispatchers.IO) { repo.saveTokensFromQuery(query.text) }
+                                Desktop.getDesktop(item.url)
+                            }
+                        )
+                        if (idx < view.lastIndex) HorizontalDivider()
 
-                    // Load more when reaching near the end (no LaunchedEffect; just fire-and-forget)
-                    if (idx == view.size - 10 && !isLoadingMore) {
-                        repo.loadMore()
+                        // Load more when reaching near the end (no LaunchedEffect; just fire-and-forget)
+                        if (idx == view.size - 10 && !isLoadingMore) {
+                            repo.loadMore()
+                        }
+                    }
+
+                    if (isLoadingMore) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                LinearProgressIndicator()
+                            }
+                        }
                     }
                 }
 
-                if (isLoadingMore) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            LinearProgressIndicator()
+                if (view.isEmpty() && !loading && !isInitialLoading) {
+                    Column(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            text = if (query.text.isNotBlank()) "No results for \"${query.text}\"" else "No history found",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Button(onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                loading = true
+                                try {
+                                    repo.refresh(selection)
+                                } finally {
+                                    loading = false
+                                }
+                            }
+                        }) {
+                            Text("Refresh History")
                         }
                     }
                 }

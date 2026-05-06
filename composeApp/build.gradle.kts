@@ -46,6 +46,8 @@ kotlin {
 }
 
 
+val appVersion = providers.gradleProperty("app.version").get()
+
 compose.desktop {
     application {
         mainClass = "org.benesv.history.MainKt"
@@ -53,7 +55,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg)
             packageName = "History"
-            packageVersion = "1.0.0"
+            packageVersion = appVersion
 
             modules("java.sql")
 
@@ -76,6 +78,8 @@ compose.desktop {
 buildConfig {
     packageName("org.benesv.history")
     className("BuildConfig")
+
+    buildConfigField("APP_VERSION", appVersion)
 
     val developFlag = providers
         .gradleProperty("develop")
